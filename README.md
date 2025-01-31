@@ -1,5 +1,6 @@
 # TFG-EMG-Analysis
 Description:
+
 This repository contains a Python-based framework for processing, filtering, and analyzing electromyography (EMG) signals collected from two different devices: Delsys Trigno Avanti (gold standard) and mDurance (low-cost alternative). The project focuses on signal synchronization, filtering (using Butterworth filters), normalization, and statistical comparison through RMSE, FastDTW, and cross-correlation analysis.
 
 Features:
