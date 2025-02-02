@@ -1,4 +1,4 @@
-﻿# Import necessary libraries
+# Import necessary libraries
 import pyemgpipeline as pep
 import pandas as pd
 import numpy as np
@@ -29,6 +29,44 @@ repetition_type = ["Continuous Repetition", "5 Repetitions"]
 # Function to filter a signal using a Butterworth filter
 def filter_signal(signal, b, a):
     return filtfilt(b, a, signal)
+
+# Function to compute the RMS of a signal
+def compute_rms(signal, fz, window_size_s = 0.025, overlap_s = 0.0125):
+    """
+    Compute RMS envelope with a sliding window approach.
+
+    Parameters:
+    - signal (array): EMG signal to be processed.
+    - fs (int): Sampling frequency in Hz.
+    - window_size_s (float): Window size in seconds (default: 0.025 s).
+    - overlap_s (float): Overlap size in seconds (default: 0.0125 s).
+
+    Returns:
+    - rms_values (array): RMS envelope of the signal.
+    """
+    window_size = int(window_size_s * fz)
+    step_size = int(overlap_s * fz)
+    rms_values = np.zeros(len(signal))
+            
+    # Compute RMS values in a sliding window
+    rms_values = []
+    rms_time = []
+
+    for i in range(0, len(signal) - window_size, step_size):
+        window = signal[i:i + window_size]
+        rms_values.append(np.sqrt(np.mean(window ** 2)))
+        rms_time.append(i + window_size // 2)  # Center RMS in the window
+
+    # Convert to NumPy arrays
+    rms_values = np.array(rms_values)
+    rms_time = np.array(rms_time)
+
+    # Ensure RMS output has the same length as the original signal
+    full_time = np.arange(len(signal))  # Original time indices
+    interp_func = interp1d(rms_time, rms_values, kind='linear', fill_value='extrapolate')
+    interpolated_rms = interp_func(full_time)
+
+    return interpolated_rms
     
 # Function to load and process mDurance data
 def process_mdurance(file_path, fs):
@@ -47,11 +85,14 @@ def process_mdurance(file_path, fs):
     emg = pep.wrappers.EMGMeasurement(data=signal_array, hz=fs, trial_name=trial_name, channel_names=channel_names, emg_plot_params=emg_plot_params)
     
     emg.apply_dc_offset_remover()
+    df['no_offset'] = emg.data
     emg.apply_full_wave_rectifier()
     df['envelope'] = emg.data
     emg.apply_linear_envelope()
-    df['rms_envelope'] = emg.data
-    
+    df['linear_envelope'] = emg.data
+
+    df['rms_envelope'] = compute_rms(df['no_offset'].to_numpy(), fs)
+        
     return df
 
 # Function to load and process Delsys data
@@ -68,11 +109,14 @@ def process_delsys(file_path, fs):
     emg = pep.wrappers.EMGMeasurement(data=signal_array, hz=fs, trial_name=trial_name, channel_names=channel_names, emg_plot_params=emg_plot_params)
     
     emg.apply_dc_offset_remover()
+    df['no_offset'] = emg.data
     emg.apply_full_wave_rectifier()
     df['envelope'] = emg.data
     emg.apply_linear_envelope()
-    df['rms_envelope'] = emg.data
-    
+    df['linear_envelope'] = emg.data
+
+    df['rms_envelope'] = compute_rms(df['no_offset'].to_numpy(), fs)
+        
     return df
 
 # Function to synchronize signals between mDurance and Delsys
@@ -104,35 +148,6 @@ def synchronize_signals(mdurance_df, delsys_df, target_fs, threshold):
     delsys_df['rms_envelope'] = delsys_interpolator(common_time)
     
     return mdurance_df, delsys_df
-
-# Function to recalculate the features of a signal
-def recalculate_features(df, fs, system_type):
-    if system_type == 'mdurance':
-        signal_column = 'filtered_signal'
-    elif system_type == 'delsys':
-        signal_column = 'filtered_signal'
-    else:
-        raise ValueError("Invalid system type. Use 'delsys' or 'mdurance'")
-    
-    # Convert the signal to ndarray
-    signal_array = df[signal_column].to_numpy()
-    trial_name = f"test {system_type}"
-    channel_names = ['biceps brachii']
-    emg_plot_params = pep.plots.EMGPlotParams(n_rows=1,fig_kwargs={'figsize': (12, 8), 'dpi': 80, 'subplotpars': SubplotParams(wspace=0, hspace=0.6)}, line2d_kwargs={'color': 'blue'})
-    
-    # Initialize the EMGMeasurement object with data and parameters
-    emg = pep.wrappers.EMGMeasurement(data = signal_array, hz = fs, trial_name = trial_name, channel_names = channel_names, emg_plot_params = emg_plot_params)
-    
-    # Apply signal processing steps
-    emg.apply_dc_offset_remover()
-    emg.apply_full_wave_rectifier()
-    envelope = emg.data
-    df['envelope']  = envelope
-    emg.apply_linear_envelope()
-    rms = emg.data
-    df['rms_envelope'] = rms
-    
-    return df
 
 # Function to load patient data
 def load_data():
@@ -423,13 +438,14 @@ def plot_two_graphs(df_delsys, df_mdurance):
         c1 = input("Enter the name of the variable to plot (signal/filtered_signal/envelope/rms_envelope): ").strip().lower()
         if c1 in df_delsys.columns and c1 in df_mdurance.columns:
             plt.figure(figsize=(12, 8))
+            plt.subplot(2, 1, 1)
             plt.plot(df_delsys['time'], df_delsys[c1], label='Delsys')
             plt.xlabel('Time (s)')
             plt.ylabel(c1)
             plt.title(f'Graph of {c1} in Delsys')
             plt.legend()
             
-            plt.figure(figsize=(12, 8))
+            plt.subplot(2, 1, 2)
             plt.plot(df_mdurance['time'], df_mdurance[c1], label='mDurance')
             plt.xlabel('Time (s)')
             plt.ylabel(c1)
@@ -447,15 +463,15 @@ def plot_two_graphs(df_delsys, df_mdurance):
                 return
         
         plt.figure(figsize=(12, 8))
+        plt.subplot(2, 1, 1)
         for var in variables:
             plt.plot(df_delsys['time'], df_delsys[var], label=f'Delsys {var}')
         plt.xlabel('Time (s)')
         plt.ylabel('Amplitude')
         plt.title(f"Graph of {', '.join(variables)} in Delsys")
         plt.legend()
-        plt.show()
         
-        plt.figure(figsize=(12, 8))
+        plt.subplot(2, 1, 2)
         for var in variables:
             plt.plot(df_mdurance['time'], df_mdurance[var], label=f'mDurance {var}')
         plt.xlabel('Time (s)')
@@ -465,15 +481,15 @@ def plot_two_graphs(df_delsys, df_mdurance):
         plt.show()
     elif num_var == '4':
         plt.figure(figsize=(12, 8))
+        plt.subplot(2, 1, 1)
         for var in ['signal', 'filtered_signal', 'envelope', 'rms_envelope']:
             plt.plot(df_delsys['time'], df_delsys[var], label=f'Delsys {var}')
         plt.xlabel('Time (s)')
         plt.ylabel('Amplitude')
         plt.title("Graph of all variables in Delsys")
         plt.legend()
-        plt.show()
         
-        plt.figure(figsize=(12, 8))
+        plt.subplot(2, 1, 2)
         for var in ['signal', 'filtered_signal', 'envelope', 'rms_envelope']:
             plt.plot(df_mdurance['time'], df_mdurance[var], label=f'mDurance {var}')
         plt.xlabel('Time (s)')
@@ -564,7 +580,7 @@ def calculate_statistics(patient):
     corr_metrics = ["Cross-Correlation Continuous", "Cross-Correlation Repetitions"]
 
     # Set up the figure with 3 horizontal plots
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig, axes = plt.subplots(3, 1, figsize=(18, 6))
 
     # Plot RMSE
     axes[0].bar(rmse_metrics, [means[m] for m in rmse_metrics], yerr=[std_devs[m] for m in rmse_metrics], capsize=5, color=['blue', 'green'])
@@ -575,11 +591,13 @@ def calculate_statistics(patient):
     # Plot FastDTW
     axes[1].bar(dtw_metrics, [means[m] for m in dtw_metrics], yerr=[std_devs[m] for m in dtw_metrics], capsize=5, color=['red', 'orange'])
     axes[1].set_title("FastDTW (Mean ± Std)")
+    axes[1].set_ylabel("Metric Value")
     axes[1].grid(axis='y', linestyle='--', alpha=0.7)
 
     # Plot Cross-Correlation
     axes[2].bar(corr_metrics, [means[m] for m in corr_metrics], yerr=[std_devs[m] for m in corr_metrics], capsize=5, color=['purple', 'brown'])
-    axes[2].set_title("Cross-Correlation (Mean ± Std)") 
+    axes[2].set_title("Cross-Correlation (Mean ± Std)")
+    axes[2].set_ylabel("Metric Value")
     axes[2].grid(axis='y', linestyle='--', alpha=0.7)
 
     # Show plot
